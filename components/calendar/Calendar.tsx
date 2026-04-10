@@ -5,7 +5,6 @@ import { isSameDay, format } from "date-fns";
 import { DateRange, MONTH_IMAGES } from "@/lib/calendar";
 import { HeroImage } from "./HeroImage";
 import { MonthNavigator } from "./MonthNavigator";
-import { NotesPanel } from "./NotesPanel";
 
 type FlipDir = "next" | "prev" | null;
 
@@ -17,7 +16,7 @@ export type EventColor = "rose" | "amber" | "emerald" | "sky" | "violet" | "slat
 
 export interface PersonalEvent {
   id: string;
-  date: string;
+  date: string; // yyyy-MM-dd
   title: string;
   category: EventCategory;
   color: EventColor;
@@ -128,6 +127,18 @@ function loadEvents(): PersonalEvent[] {
 function saveEvents(ev: PersonalEvent[]) {
   if (typeof window === "undefined") return;
   localStorage.setItem(LS_KEY, JSON.stringify(ev));
+}
+
+const NOTES_LS_KEY = "cal_range_notes_v1";
+function loadNotes(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try { return JSON.parse(localStorage.getItem(NOTES_LS_KEY) || "{}"); } catch { return {}; }
+}
+function saveNote(key: string, text: string) {
+  if (typeof window === "undefined") return;
+  const all = loadNotes();
+  if (text.trim()) all[key] = text; else delete all[key];
+  localStorage.setItem(NOTES_LS_KEY, JSON.stringify(all));
 }
 
 // =============================================================================
@@ -474,7 +485,6 @@ const EnhancedCalendarGrid: React.FC<EnhancedGridProps> = ({ currentMonth, range
             ...perEvs.map(e => ({ type:"per" as const, data:e })),
           ];
           const shown  = allBadges.slice(0, 2);
-          const extras = allBadges.length - shown.length + (isHol && !isSel ? 0 : 0);
 
           return (
             <div
@@ -541,6 +551,193 @@ const EnhancedCalendarGrid: React.FC<EnhancedGridProps> = ({ currentMonth, range
           );
         })}
       </div>
+    </div>
+  );
+};
+
+// =============================================================================
+// INLINE NOTES PANEL — self-contained, replaces external NotesPanel
+// =============================================================================
+interface InlineNotesPanelProps {
+  range: DateRange;
+  accentColor: string;
+  dark?: boolean;
+  onOpenEvents: (date: Date) => void;
+}
+
+const InlineNotesPanel: React.FC<InlineNotesPanelProps> = ({ range, accentColor, dark, onOpenEvents }) => {
+  const [allNotes, setAllNotes] = useState<Record<string, string>>({});
+  const [draft,    setDraft]    = useState("");
+  const [saved,    setSaved]    = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Load all notes once
+  useEffect(() => { setAllNotes(loadNotes()); }, []);
+
+  // Build key from current range
+  const rangeKey = range.start
+    ? range.end && !isSameDay(range.start, range.end)
+      ? `${format(range.start,"yyyy-MM-dd")}_${format(range.end,"yyyy-MM-dd")}`
+      : format(range.start,"yyyy-MM-dd")
+    : null;
+
+  // When range key changes, load the draft for that key
+  useEffect(() => {
+    if (rangeKey) setDraft(allNotes[rangeKey] || "");
+    setSaved(false);
+  }, [rangeKey, allNotes]);
+
+  const handleSave = () => {
+    if (!rangeKey) return;
+    saveNote(rangeKey, draft);
+    setAllNotes(prev => {
+      const next = { ...prev };
+      if (draft.trim()) next[rangeKey!] = draft; else delete next[rangeKey!];
+      return next;
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleClear = () => {
+    if (!rangeKey) return;
+    setDraft("");
+    saveNote(rangeKey, "");
+    setAllNotes(prev => { const next = { ...prev }; delete next[rangeKey!]; return next; });
+    setSaved(false);
+  };
+
+  const textMain = dark ? "#e8e4ff" : "#1a1535";
+  const textSub  = dark ? "#9890c0" : "#6b6490";
+  const inputBg  = dark ? "rgba(30,25,60,0.6)" : "rgba(248,246,255,0.8)";
+  const inputBdr = dark ? "rgba(80,65,140,0.35)" : "rgba(210,205,235,0.7)";
+  const divider  = dark ? "rgba(80,65,140,0.18)" : "rgba(200,195,235,0.4)";
+
+  // Saved notes list (excluding current range)
+  const savedEntries = Object.entries(allNotes).filter(([k]) => k !== rangeKey && allNotes[k]?.trim());
+
+  return (
+    <div>
+      {/* Header row */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"12px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
+          <div style={{ width:"3px", height:"16px", borderRadius:"2px", background:`linear-gradient(to bottom,${accentColor},${accentColor}60)` }} />
+          <span style={{ fontSize:"11px", fontWeight:700, letterSpacing:"0.14em", fontFamily:"'Barlow Condensed',sans-serif", color:dark?`${accentColor}cc`:accentColor }}>RANGE NOTES</span>
+        </div>
+        {range.start && (
+          <div style={{ display:"flex", alignItems:"center", gap:"8px" }}>
+            <span style={{ fontSize:"10px", fontFamily:"'Barlow Condensed',sans-serif", color:textSub, letterSpacing:"0.06em" }}>
+              {range.end && !isSameDay(range.start, range.end)
+                ? `${format(range.start,"MMM d")} – ${format(range.end,"MMM d, yyyy")}`
+                : format(range.start,"MMMM d, yyyy")}
+            </span>
+            {/* Manage events button for the start date */}
+            <button
+              onClick={() => range.start && onOpenEvents(range.start)}
+              style={{ fontSize:"10px", fontWeight:700, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:"0.07em", padding:"3px 10px", borderRadius:"20px", border:`1px solid ${accentColor}40`, background:`${accentColor}14`, color:accentColor, cursor:"pointer", transition:"all 0.18s" }}
+              onMouseEnter={e=>(e.currentTarget.style.background=`${accentColor}25`)}
+              onMouseLeave={e=>(e.currentTarget.style.background=`${accentColor}14`)}
+            >EVENTS ›</button>
+          </div>
+        )}
+      </div>
+
+      {!range.start ? (
+        /* No selection state */
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"10px", padding:"20px 0" }}>
+          <div style={{ fontSize:"24px", opacity:0.4 }}>📋</div>
+          <p style={{ fontSize:"12px", color:textSub, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:"0.06em", textAlign:"center", lineHeight:1.5 }}>
+            CLICK A DATE TO SELECT IT<br/>
+            <span style={{ opacity:0.7 }}>CLICK A SECOND DATE FOR A RANGE</span>
+          </p>
+          <p style={{ fontSize:"11px", color:textSub, opacity:0.6, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:"0.05em", textAlign:"center" }}>
+            DOUBLE-CLICK ANY DATE TO MANAGE ITS EVENTS
+          </p>
+        </div>
+      ) : (
+        /* Notes editor */
+        <div style={{ display:"flex", flexDirection:"column", gap:"10px" }}>
+          {/* Status */}
+          {!range.end && (
+            <div style={{ fontSize:"11px", color:accentColor, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:"0.08em", padding:"6px 10px", borderRadius:"8px", background:`${accentColor}12`, border:`1px solid ${accentColor}25` }}>
+              ↗ NOW CLICK A SECOND DATE TO SET YOUR RANGE END
+            </div>
+          )}
+
+          {/* Textarea */}
+          <div style={{ position:"relative" }}>
+            <textarea
+              ref={textareaRef}
+              value={draft}
+              onChange={e => { setDraft(e.target.value); setSaved(false); }}
+              onKeyDown={e => { if ((e.metaKey||e.ctrlKey) && e.key==="Enter") { e.preventDefault(); handleSave(); } }}
+              placeholder={range.end && !isSameDay(range.start,range.end)
+                ? `Notes for ${format(range.start,"MMM d")}–${format(range.end,"MMM d")}…`
+                : `Notes for ${format(range.start,"MMMM d")}…`}
+              style={{
+                width:"100%", minHeight:"80px", padding:"12px 14px", borderRadius:"12px",
+                border:`1.5px solid ${draft ? accentColor+"50" : inputBdr}`,
+                background:inputBg, color:textMain,
+                fontSize:"13px", fontFamily:"'Lora',serif", lineHeight:1.6,
+                resize:"vertical", outline:"none", boxSizing:"border-box",
+                transition:"border-color 0.2s",
+              }}
+            />
+            {/* Cmd+Enter hint */}
+            {draft && !saved && (
+              <div style={{ position:"absolute", bottom:"8px", right:"10px", fontSize:"10px", color:textSub, opacity:0.55, fontFamily:"'Barlow Condensed',sans-serif", pointerEvents:"none" }}>⌘↵ to save</div>
+            )}
+          </div>
+
+          {/* Action row */}
+          <div style={{ display:"flex", gap:"8px", alignItems:"center" }}>
+            {draft && (
+              <button onClick={handleClear} style={{ fontSize:"11px", fontWeight:700, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:"0.06em", padding:"6px 12px", borderRadius:"8px", border:`1px solid ${dark?"rgba(220,38,38,0.3)":"#fca5a5"}`, background:dark?"rgba(100,20,20,0.4)":"#fee2e2", color:dark?"#fca5a5":"#dc2626", cursor:"pointer", transition:"all 0.18s" }}>CLEAR</button>
+            )}
+            <button
+              onClick={handleSave}
+              disabled={!draft.trim()}
+              style={{ flex:1, fontSize:"12px", fontWeight:700, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:"0.08em", padding:"8px 16px", borderRadius:"8px", border:"none", cursor:draft.trim()?"pointer":"default", background:saved?`${accentColor}22`:(draft.trim()?`linear-gradient(135deg,${accentColor},${accentColor}cc)`:inputBg), color:saved?accentColor:(draft.trim()?"#fff":textSub), boxShadow:draft.trim()&&!saved?`0 4px 14px ${accentColor}40`:"none", transition:"all 0.22s ease" }}
+            >
+              {saved ? "✓ SAVED" : "SAVE NOTE"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Previously saved notes for other dates */}
+      {savedEntries.length > 0 && (
+        <div style={{ marginTop:"16px", borderTop:`1px solid ${divider}`, paddingTop:"14px" }}>
+          <div style={{ fontSize:"10px", fontWeight:700, letterSpacing:"0.12em", color:textSub, marginBottom:"8px", fontFamily:"'Barlow Condensed',sans-serif" }}>SAVED NOTES</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
+            {savedEntries.slice(0,3).map(([key, text]) => {
+              const [s, e] = key.split("_");
+              const label = e ? `${s} → ${e}` : s;
+              return (
+                <div key={key} style={{ padding:"9px 12px", borderRadius:"10px", background:inputBg, border:`1px solid ${inputBdr}`, cursor:"pointer", transition:"opacity 0.15s" }}
+                  onClick={() => {
+                    // Restore this range
+                    const start = new Date(s + "T00:00:00");
+                    if (e) {
+                      const end = new Date(e + "T00:00:00");
+                      // We can't set range from here directly (no setter prop), but we can show the note
+                    }
+                    setDraft(text);
+                  }}
+                  onMouseEnter={el=>(el.currentTarget.style.opacity="0.75")}
+                  onMouseLeave={el=>(el.currentTarget.style.opacity="1")}
+                >
+                  <div style={{ fontSize:"10px", fontWeight:700, color:accentColor, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:"0.06em", marginBottom:"3px" }}>{label}</div>
+                  <div style={{ fontSize:"12px", color:textMain, fontFamily:"'Lora',serif", lineHeight:1.4, overflow:"hidden", display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical" as React.CSSProperties["WebkitBoxOrient"] }}>{text}</div>
+                </div>
+              );
+            })}
+            {savedEntries.length > 3 && (
+              <div style={{ fontSize:"10px", color:textSub, fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:"0.06em", textAlign:"center", opacity:0.6 }}>+{savedEntries.length-3} more saved notes</div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -647,7 +844,26 @@ export const Calendar: React.FC<CalendarProps> = ({ dark }) => {
     setPersonalEvents(prev => { const upd = prev.filter(e=>e.id!==id); saveEvents(upd); return upd; });
   }, []);
 
-  const handleDayClick  = useCallback((day: Date) => { setModalState({ mode:"detail", date:day }); }, []);
+  // Single click = range selection; double-click on same date = open events
+  const lastClickRef = useRef<{ date: string; time: number } | null>(null);
+  const handleDayClick = useCallback((day: Date) => {
+    const ds = format(day, "yyyy-MM-dd");
+    const now = Date.now();
+    const last = lastClickRef.current;
+    if (last && last.date === ds && now - last.time < 400) {
+      lastClickRef.current = null;
+      setModalState({ mode: "detail", date: day });
+      return;
+    }
+    lastClickRef.current = { date: ds, time: now };
+    setRange(prev => {
+      if (!prev.start || (prev.start && prev.end)) { setHoverDate(null); return { start: day, end: null }; }
+      if (isSameDay(day, prev.start)) { return { start: null, end: null }; }
+      const ordered = day >= prev.start ? { start: prev.start, end: day } : { start: day, end: prev.start };
+      setHoverDate(null);
+      return ordered;
+    });
+  }, []);
   const handleDayHover  = useCallback((day: Date) => { if (range.start&&!range.end) setHoverDate(day); }, [range]);
   const handleGridLeave = useCallback(() => { if (range.start&&!range.end) setHoverDate(null); }, [range]);
 
@@ -774,14 +990,14 @@ export const Calendar: React.FC<CalendarProps> = ({ dark }) => {
                       </div>
                     ))}
                     <div style={{ marginLeft:"auto" }}>
-                      <span style={{ fontSize:"10px",fontFamily:"'Barlow Condensed',sans-serif",color:dark?"rgba(100,90,160,0.6)":"#bbb",letterSpacing:"0.05em" }}>TAP DATE TO MANAGE EVENTS</span>
+                      <span style={{ fontSize:"10px",fontFamily:"'Barlow Condensed',sans-serif",color:dark?"rgba(100,90,160,0.6)":"#bbb",letterSpacing:"0.05em" }}>DOUBLE-CLICK DATE FOR EVENTS</span>
                     </div>
                   </div>
 
                   {/* Range hint */}
                   <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:"6px" }}>
                     <p style={{ fontSize:"10px",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"0.06em",color:dark?"rgba(100,90,160,0.7)":"#bbb" }}>
-                      {!range.start?"CLICK A DAY TO SELECT":!range.end?"CLICK AN END DATE":"RANGE SELECTED ✓"}
+                      {!range.start?"CLICK DATE TO START":!range.end?"CLICK END DATE":"RANGE SELECTED ✓"}
                     </p>
                     {range.start && (
                       <button onClick={()=>{setRange({start:null,end:null});setHoverDate(null);}} style={{ fontSize:"10px",color:dark?"rgba(120,110,170,0.7)":"#ccc",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:"0.08em",padding:"3px 10px",borderRadius:"20px",border:`1px solid ${dark?"rgba(80,70,130,0.4)":"#e8e8f0"}`,background:dark?"rgba(30,25,60,0.5)":"transparent",cursor:"pointer",transition:"all 0.2s" }} onMouseEnter={e=>{const b=e.currentTarget;b.style.color=accentColor;b.style.borderColor=`${accentColor}50`;b.style.backgroundColor=`${accentColor}14`;}} onMouseLeave={e=>{const b=e.currentTarget;b.style.color=dark?"rgba(120,110,170,0.7)":"#ccc";b.style.borderColor=dark?"rgba(80,70,130,0.4)":"#e8e8f0";b.style.backgroundColor=dark?"rgba(30,25,60,0.5)":"transparent";}}>CLEAR</button>
@@ -793,7 +1009,7 @@ export const Calendar: React.FC<CalendarProps> = ({ dark }) => {
               {/* Divider + Notes */}
               <div style={{ margin:"0 24px", height:"1px", background:`linear-gradient(to right,transparent,${accentColor}30,transparent)` }} />
               <div style={{ margin:"0 24px", paddingBottom:"24px", paddingTop:"16px" }}>
-                <NotesPanel range={range} accentColor={accentColor} dark={dark} />
+                <InlineNotesPanel range={range} accentColor={accentColor} dark={dark} onOpenEvents={(date) => setModalState({ mode:"detail", date })} />
               </div>
 
               <div style={{ position:"absolute",top:0,left:0,bottom:0,width:"3px",borderRadius:"20px 0 0 20px",background:"linear-gradient(to right,rgba(0,0,0,0.07),transparent)",zIndex:10,pointerEvents:"none" }} />
